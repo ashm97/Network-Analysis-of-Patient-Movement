@@ -223,89 +223,107 @@ patient.list <- split( path.raw , f = path.raw$`Anonymised names` )
 # ------------------------------------------------------------------------------
 
 ##
-##  1. Histomgrams and patients stays
+##  1.  Get Node Sizes
 ##
 
-day.seq = c(1,5,10,15,20,25)
+### Definintions
 
-count.list = lapply(day.seq, function(x){
-  # Subset list for n days prior then combine into single dataframe
-  sub.df = bind_rows(lapply(patient.list,subset_stay,x))
-  # Create a coutn table 
-  count.tab = as.data.frame(table(sub.df$CurrentLastWard))
-  colnames(count.tab) = c("Ward",paste("Count",x,sep = ""))
-  return(count.tab)
-  
-})
+## ------------ Confirmed HOCI
 
+# Confirmed HOCI was defined as any patient who had a COVID-19 positive sample 
+# sent >14 days after admission. As the sample was taken outside the incubation 
+# period from community-acquisition the most plausible explanation is healthcare-acquisition, 
+# irrespective of symptoms at admission. 
 
+## ------------ Possible HOCI 
 
-full.join.df = count.list %>% Reduce(function(dtf1,dtf2) full_join(dtf1,dtf2,by="Ward"), .)
-
-full.join.df[is.na(full.join.df)] <- 0
-full.join.df = cbind(full.join.df[,1:2],(full.join.df[,3:ncol(full.join.df)] - full.join.df[,2:(ncol(full.join.df)-1)]))
-
-full.join.df.long = full.join.df %>% pivot_longer(-Ward, names_to = "Days_prior", values_to = "Count")
-
-full.join.df.long$Days_prior = factor(full.join.df.long$Days_prior, levels = rev(paste("Count",day.seq,sep = "")))
+# Possible HOCI was defined as any patient who had a COVID-19 positive sample 
+# sent >7 days but < 14 days after admission AND did not have any symptoms of 
+# COVID-19 (fever, cough, SOB, malaise) on admission. This adjusts for the 
+# incubation period is up to 14 days, as it is still plausible that these 
+# patients could have possibly acquired their infection in the community.
 
 
-# Make plot
-ggplot(full.join.df.long, aes(x=Ward, y=Count,fill = Days_prior)) + 
-  geom_bar(position="dodge",stat="identity")+
-  theme_minimal()+
-  labs(title = "Aggregate HOCI Covid Patient Days on Wards grouped by days prior (Patients w/ Los >= 14 days)",
-       x = "", 
-       y = "Aggregate Patient Ward Days")+
-  theme(axis.text.x=element_text(angle=90, vjust=0.5, hjust=1))
+# 1.1 - Confirmed HOCI Covid Patient Data Movement
+con.hoci.df = bind_rows(lapply(patient.list,subset_stay))
+count.con.hoci = as.data.frame(table(con.hoci.df$CurrentLastWard))
+colnames(count.con.hoci) = c("Ward",paste("Count"))
 
+# 1.2 - Possible HOCI Covid Patient Data Movement
+pos.hoci.df = bind_rows(lapply(patient.list,subset_stay,14,7,FALSE))
+count.pos.hoci = as.data.frame(table(pos.hoci.df$CurrentLastWard))
+colnames(count.pos.hoci) = c("Ward",paste("Count"))
 
+# 1.3 - Join Two counts
+count.con.pos = list(count.con.hoci,count.pos.hoci) %>% Reduce(function(dtf1,dtf2) full_join(dtf1,dtf2,by="Ward"), .)
+colnames(count.con.pos) = c("Ward","con_HOCI","pos_HOCI")
 
-
-
-
-
-
-
-
-# ------------------------------------------------------------------------------
-
-##
-##  2. Get Edge List 
-##
-
-
-# 2.1 Get Node Df
-node.df = count.list %>% Reduce(function(dtf1,dtf2) full_join(dtf1,dtf2,by="Ward"), .)
-node.df[is.na(node.df)] <- 0
-#Take only total
-node.df = node.df[,c(1,ncol(node.df))]
 
 #Add column which is hosptial
 map = unique(path.raw[,5:6])
 colnames(map)[2] = "Ward"
 
-node.df = left_join(node.df , map , by = "Ward")
-colnames(node.df) = c("Ward","Size","Facility")
+count.con.hoci = left_join(count.con.hoci , map , by = "Ward")
+colnames(count.con.hoci) = c("Ward","Size","Facility")
 
-write.csv(node.df,"node.df.csv")
+count.pos.hoci = left_join(count.pos.hoci , map , by = "Ward")
+colnames(count.pos.hoci) = c("Ward","Size","Facility")
 
-# Edge weights come from Movement Prior to Postive Sample Collection Date
-
-# 2.2 First Method weights edges by 1 and only take edges within lookback window
-
-# Subset list for n days prior then combine into single dataframe
-meta.edges = bind_rows(lapply(patient.list,get_edge,25))
-
-# Count duplicates assuming directed``````````````````````````````
-meta.edges = count(meta.edges, vars = c("ward1","ward2"))
-colnames(meta.edges) = c("source","target","weight")
-write.csv(meta.edges,"edge.df.csv")
+count.con.pos = left_join(count.con.pos , map , by = "Ward")
+colnames(count.con.pos) = c("Ward","con_HOCI","pos_HOCI","Facility")
 
 
-# 2.3 Second Method weights edges by a kernal based on distance from onset 
 
 
+# 1.4 - Save as Node CSV's
+write.csv(count.con.hoci,"confirmed_nodes.csv",row.names = F)
+write.csv(count.pos.hoci,"possible_nodes.csv",row.names = F)
+write.csv(count.con.pos,"combined_nodes.csv",row.names = F)
+
+
+
+# ------------------------------------------------------------------------------
+
+##
+##  2.  Get Edges
+##
+
+
+# 2.1 - Confirmed HOCI Covid Patient Data Movement
+con.hoci.edges = bind_rows(lapply(patient.list,get_wrapper_edge))
+con.hoci.edges = count(con.hoci.edges, vars = c("ward1","ward2"))
+colnames(con.hoci.edges) = c("source","target","weight")
+con.hoci.edges$hoci = rep("Confirmed",nrow(con.hoci.edges))
+
+
+# 2.2 - Possible HOCI Covid Patient Data Movement
+pos.hoci.edges = bind_rows(lapply(patient.list,get_wrapper_edge,14,7,FALSE))
+pos.hoci.edges = count(pos.hoci.edges, vars = c("ward1","ward2"))
+colnames(pos.hoci.edges) = c("source","target","weight")
+pos.hoci.edges$hoci = rep("Possible",nrow(pos.hoci.edges))
+
+
+# 2.3 - Combine
+combined.edges = rbind(con.hoci.edges,pos.hoci.edges)
+
+
+# 2.4 - Save as Node CSV's
+write.csv(con.hoci.edges,"confirmed_edges.csv",row.names = F)
+write.csv(pos.hoci.edges,"possible_edges.csv",row.names = F)
+write.csv(combined.edges,"combined_edges.csv",row.names = F)
+
+
+
+
+# ------------------------------------------------------------------------------
+
+##
+##  3.  Create Node and Edge especially for analysis
+##
+
+networkx.nodes = count.con.pos
+networkx.nodes$TotalSize = networkx.nodes$con_HOCI + networkx.nodes$pos_HOCI
+write.csv(networkx.nodes,"networkx.nodes.csv",row.names = F)
 
 
 
@@ -314,8 +332,9 @@ write.csv(meta.edges,"edge.df.csv")
 # ------------------------------------------------------------------------------
 
 ##
-##  2. Plot Network
+##  4.
 ##
+
 
 
 

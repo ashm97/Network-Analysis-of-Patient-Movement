@@ -1,8 +1,8 @@
 ## ---------------------------
 ##
-## Script name: Main Script To View Network Rep of Patients
+## Script name: Main Script To Construct Patient Pathway Network
 ##
-## Purpose of script: 
+## Purpose of script: Convert Patient Location Date Data into a Network representation.
 ##
 ## Author: Mr. Ashleigh C. Myall
 ##
